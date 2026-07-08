@@ -19,6 +19,7 @@ MATERIAL_TEXTURE_MAP = {
     "cloth1": "cloth1.png",
     "Hair": "Hair.png",
     "underwear": "underwear.png",
+    "metal": "cloth2.png",
 }
 
 
