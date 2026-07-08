@@ -71,6 +71,41 @@ def relink_material_textures(textures_dir):
         mat.blend_method = "OPAQUE"
 
 
+def tune_material_pbr_values():
+    for mat_name in ("Diamond", "pearl"):
+        mat = bpy.data.materials.get(mat_name)
+        if mat is None or not mat.use_nodes:
+            continue
+        bsdf = next(
+            (n for n in mat.node_tree.nodes if n.type == "BSDF_PRINCIPLED"), None
+        )
+        if bsdf is None:
+            continue
+        bsdf.inputs["Base Color"].default_value = (1.0, 1.0, 1.0, 1.0)
+        bsdf.inputs["Metallic"].default_value = 0.0
+        bsdf.inputs["Roughness"].default_value = 0.0
+
+    chain = bpy.data.materials.get("chain")
+    if chain is not None and chain.use_nodes:
+        bsdf = next(
+            (n for n in chain.node_tree.nodes if n.type == "BSDF_PRINCIPLED"), None
+        )
+        if bsdf is not None:
+            bsdf.inputs["Metallic"].default_value = 0.8731563091278076
+            bsdf.inputs["Roughness"].default_value = 0.2418879121541977
+
+    tear = bpy.data.materials.get("tear")
+    if tear is not None and tear.use_nodes:
+        node_tree = tear.node_tree
+        for node in list(node_tree.nodes):
+            node_tree.nodes.remove(node)
+        output = node_tree.nodes.new("ShaderNodeOutputMaterial")
+        bsdf = node_tree.nodes.new("ShaderNodeBsdfPrincipled")
+        bsdf.inputs["Emission Color"].default_value = (0.0, 0.0047, 1.0, 1.0)
+        bsdf.inputs["Emission Strength"].default_value = 1.0
+        node_tree.links.new(bsdf.outputs["BSDF"], output.inputs["Surface"])
+
+
 def harvest_extra_animations(extra_anim_paths):
     for anim_path in extra_anim_paths:
         before = set(bpy.data.objects)
@@ -112,6 +147,7 @@ def main():
         bpy.ops.wm.read_factory_settings(use_empty=True)
         bpy.ops.import_scene.fbx(filepath=mode)
         relink_material_textures(TEXTURES_DIR)
+        tune_material_pbr_values()
 
     if extra_anim_paths:
         harvest_extra_animations(extra_anim_paths)
