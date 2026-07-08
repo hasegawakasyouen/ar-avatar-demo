@@ -22,9 +22,8 @@ def count_triangles(obj):
 
 def remove_shape_keys(mesh_objs):
     for obj in mesh_objs:
-        if obj.data.shape_keys:
-            while obj.data.shape_keys:
-                obj.shape_key_remove(obj.data.shape_keys.key_blocks[0])
+        while obj.data.shape_keys and obj.data.shape_keys.key_blocks:
+            obj.shape_key_remove(obj.data.shape_keys.key_blocks[0])
 
 
 def join_meshes(mesh_objs):
