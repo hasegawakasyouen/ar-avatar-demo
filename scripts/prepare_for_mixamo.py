@@ -11,9 +11,31 @@ def get_args():
     if "--" not in argv:
         raise SystemExit(
             "Usage: blender --background --python prepare_for_mixamo.py "
-            "-- <input_fbx> <output_fbx>"
+            "-- <input_fbx> <output_fbx> [--decimate-threshold N] [--decimate-target N]"
         )
     return argv[argv.index("--") + 1:]
+
+
+def parse_args(args):
+    positional = []
+    decimate_threshold = DECIMATE_THRESHOLD
+    decimate_target = DECIMATE_TARGET
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg == "--decimate-threshold":
+            decimate_threshold = int(args[i + 1])
+            i += 2
+        elif arg == "--decimate-target":
+            decimate_target = int(args[i + 1])
+            i += 2
+        else:
+            positional.append(arg)
+            i += 1
+    if len(positional) != 2:
+        raise SystemExit("Expected 2 positional args: <input_fbx> <output_fbx>")
+    input_fbx, output_fbx = positional
+    return input_fbx, output_fbx, decimate_threshold, decimate_target
 
 
 def count_triangles(obj):
@@ -37,12 +59,12 @@ def join_meshes(mesh_objs):
     return bpy.context.view_layer.objects.active
 
 
-def decimate_if_needed(mesh_obj):
+def decimate_if_needed(mesh_obj, threshold, target):
     tris = count_triangles(mesh_obj)
-    if tris <= DECIMATE_THRESHOLD:
-        print(f"PREPARE_INFO triangles={tris} <= threshold={DECIMATE_THRESHOLD}, skipping decimate")
+    if tris <= threshold:
+        print(f"PREPARE_INFO triangles={tris} <= threshold={threshold}, skipping decimate")
         return
-    ratio = DECIMATE_TARGET / tris
+    ratio = target / tris
     mod = mesh_obj.modifiers.new(name="Decimate", type='DECIMATE')
     mod.ratio = ratio
     bpy.context.view_layer.objects.active = mesh_obj
@@ -67,9 +89,7 @@ def strip_armature(mesh_objs):
 
 def main():
     args = get_args()
-    if len(args) != 2:
-        raise SystemExit("Expected 2 args: <input_fbx> <output_fbx>")
-    input_fbx, output_fbx = args
+    input_fbx, output_fbx, decimate_threshold, decimate_target = parse_args(args)
 
     bpy.ops.wm.read_factory_settings(use_empty=True)
     bpy.ops.import_scene.fbx(filepath=input_fbx)
@@ -78,7 +98,7 @@ def main():
 
     remove_shape_keys(mesh_objs)
     joined = join_meshes(mesh_objs)
-    decimate_if_needed(joined)
+    decimate_if_needed(joined, decimate_threshold, decimate_target)
     strip_armature([joined])
 
     bpy.ops.export_scene.fbx(filepath=output_fbx, use_selection=False, add_leaf_bones=False)
