@@ -63,6 +63,7 @@ def relink_material_textures(textures_dir):
 
         tex_node = node_tree.nodes.new("ShaderNodeTexImage")
         tex_node.image = image
+        tex_node.extension = 'EXTEND'
         node_tree.links.new(tex_node.outputs["Color"], base_color_input)
 
         # PNGのアルファチャンネルが半透明・ゴースト化を引き起こした過去の回帰
