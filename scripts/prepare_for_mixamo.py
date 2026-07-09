@@ -48,6 +48,20 @@ def remove_shape_keys(mesh_objs):
             obj.shape_key_remove(obj.data.shape_keys.key_blocks[0])
 
 
+def normalize_active_uv_layer(mesh_objs, target_name="UVMap"):
+    for obj in mesh_objs:
+        uv_layers = obj.data.uv_layers
+        active = uv_layers.active
+        if active is None:
+            continue
+        if active.name == target_name:
+            continue
+        existing = uv_layers.get(target_name)
+        if existing is not None:
+            existing.name = target_name + "_orig"
+        active.name = target_name
+
+
 def join_meshes(mesh_objs):
     if len(mesh_objs) == 1:
         return mesh_objs[0]
@@ -97,6 +111,7 @@ def main():
     mesh_objs = [o for o in bpy.data.objects if o.type == 'MESH']
 
     remove_shape_keys(mesh_objs)
+    normalize_active_uv_layer(mesh_objs)
     joined = join_meshes(mesh_objs)
     decimate_if_needed(joined, decimate_threshold, decimate_target)
     strip_armature([joined])
