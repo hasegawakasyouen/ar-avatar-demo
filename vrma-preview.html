@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>VRMA検証用ビューアー（使い捨て）</title>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://esm.sh/three@0.169.0",
+      "three/": "https://esm.sh/three@0.169.0/",
+      "@pixiv/three-vrm": "https://esm.sh/@pixiv/three-vrm@3?deps=three@0.169.0",
+      "@pixiv/three-vrm-animation": "https://esm.sh/@pixiv/three-vrm-animation@3?deps=three@0.169.0,@pixiv/three-vrm@3"
+    }
+  }
+  </script>
+  <style>
+    html, body { margin: 0; height: 100%; background: #ddd; }
+    #stage { width: 100vw; height: 100vh; display: block; }
+    #controls { position: fixed; top: 8px; left: 8px; font-family: sans-serif; }
+    button { display: block; margin-bottom: 4px; }
+  </style>
+</head>
+<body>
+  <canvas id="stage"></canvas>
+  <div id="controls"></div>
+  <script type="module">
+    import * as THREE from 'three';
+    import { VRMLoaderPlugin } from '@pixiv/three-vrm';
+    import { VRMAnimationLoaderPlugin, createVRMAnimationClip } from '@pixiv/three-vrm-animation';
+    import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+
+    const canvas = document.getElementById('stage');
+    const renderer = new THREE.WebGLRenderer({ canvas });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0xdddddd);
+
+    const camera = new THREE.PerspectiveCamera(30, window.innerWidth / window.innerHeight, 0.1, 20);
+    camera.position.set(0, 1.3, 3);
+    camera.lookAt(0, 1.0, 0);
+
+    scene.add(new THREE.HemisphereLight(0xffffff, 0x888888, 1.5));
+    const dirLight = new THREE.DirectionalLight(0xffffff, 1.5);
+    dirLight.position.set(1, 2, 1);
+    scene.add(dirLight);
+
+    let mixer = null;
+    window.__vrm = null;
+
+    const vrmLoader = new GLTFLoader();
+    vrmLoader.register((parser) => new VRMLoaderPlugin(parser));
+
+    vrmLoader.load('model.vrm', (gltf) => {
+      const vrm = gltf.userData.vrm;
+      window.__vrm = vrm;
+      scene.add(vrm.scene);
+      mixer = new THREE.AnimationMixer(vrm.scene);
+      console.log('VRM_LOADED');
+
+      const animationLoader = new GLTFLoader();
+      animationLoader.register((parser) => new VRMAnimationLoaderPlugin(parser));
+
+      const controls = document.getElementById('controls');
+      for (const name of ['idle', 'wave', 'dance']) {
+        const btn = document.createElement('button');
+        btn.textContent = name;
+        btn.onclick = () => {
+          animationLoader.load(`animations/${name}.vrma`, (animGltf) => {
+            const vrmAnimation = animGltf.userData.vrmAnimations[0];
+            const clip = createVRMAnimationClip(vrmAnimation, vrm);
+            mixer.stopAllAction();
+            mixer.clipAction(clip).play();
+            console.log('VRMA_LOADED', name);
+          }, undefined, (error) => {
+            console.error('VRMA_LOAD_ERROR', name, error);
+          });
+        };
+        controls.appendChild(btn);
+      }
+    }, undefined, (error) => {
+      console.error('VRM_LOAD_ERROR', error);
+    });
+
+    const clock = new THREE.Clock();
+    function animate() {
+      requestAnimationFrame(animate);
+      const delta = clock.getDelta();
+      if (mixer) mixer.update(delta);
+      if (window.__vrm) window.__vrm.update(delta);
+      renderer.render(scene, camera);
+    }
+    animate();
+  </script>
+</body>
+</html>
