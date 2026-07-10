@@ -12,9 +12,7 @@ import bpy
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if _SCRIPT_DIR not in sys.path:
     sys.path.insert(0, _SCRIPT_DIR)
-from export_vrm import apply_bone_mapping
-
-ARMATURE_NAME = "Armature"
+from export_vrm import ARMATURE_NAME, apply_bone_mapping, open_source_file, get_armature_object
 
 # Mixamoボーン名 -> リリカ側のArmatureボーン名（スパイク検証済み、指は対象外）
 RETARGET_MAP = {
@@ -58,32 +56,23 @@ def parse_args(args):
     return args[0], args[1], args[2]
 
 
-def open_source_file(ririka_blend):
-    bpy.ops.wm.open_mainfile(filepath=ririka_blend)
-
-
-def get_armature_object():
-    obj = bpy.data.objects.get(ARMATURE_NAME)
-    if obj is None or obj.type != 'ARMATURE':
-        raise RuntimeError(f"Armatureオブジェクト'{ARMATURE_NAME}'が見つかりません")
-    return obj
-
-
 def import_mixamo_animation(mixamo_fbx):
     objects_before = set(bpy.data.objects.keys())
     bpy.ops.import_scene.fbx(filepath=mixamo_fbx)
     objects_after = set(bpy.data.objects.keys())
     new_object_names = objects_after - objects_before
 
-    mixamo_armature = None
-    for name in new_object_names:
-        obj = bpy.data.objects[name]
-        if obj.type == 'ARMATURE':
-            mixamo_armature = obj
-            break
-    if mixamo_armature is None:
-        raise RuntimeError(f"'{mixamo_fbx}'からArmatureをインポートできませんでした")
-    return mixamo_armature
+    new_armatures = [
+        bpy.data.objects[name]
+        for name in new_object_names
+        if bpy.data.objects[name].type == 'ARMATURE'
+    ]
+    if len(new_armatures) != 1:
+        raise RuntimeError(
+            f"'{mixamo_fbx}'のインポートで新規Armatureが{len(new_armatures)}個見つかりました"
+            f"（1個であるべき）: {[a.name for a in new_armatures]}"
+        )
+    return new_armatures[0]
 
 
 def set_frame_range_from_action(mixamo_armature):
