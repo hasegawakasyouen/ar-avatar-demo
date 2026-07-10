@@ -52,7 +52,7 @@ Blenderをheadlessで実行し、`ririka.blend`を直接調査して確認済み
 | leftFoot / rightFoot | Foot_L / Foot_R |
 | leftToes / rightToes | Toe_L / Toe_R |
 | leftEye / rightEye | eye_L / eye_R |
-| left/rightThumbProximal, Intermediate, Distal | Thumb Proximal/Intermediate/Distal_L・R |
+| left/rightThumbMetacarpal, Proximal, Distal（VRM 1.0では"Intermediate"は無し） | Thumb Proximal/Intermediate/Distal_L・R（リリカ側は3段階ともProximal/Intermediate/Distal名のため1段階前へずらしてマッピング） |
 | left/rightIndexProximal, Intermediate, Distal | Index Proximal/Intermediate/Distal_L・R |
 | left/rightMiddleProximal, Intermediate, Distal | Middle Proximal/Intermediate/Distal_L・R |
 | left/rightRingProximal, Intermediate, Distal | Ring Proximal/Intermediate/Distal_L・R |

@@ -27,11 +27,13 @@ ar-avatar-demo/
 ├── model.glb                     # 通常3D表示用（全ブラウザ対応）
 ├── model.usdz                    # iOS AR Quick Look用
 ├── scripts/
-│   └── convert_to_web.py         # Blenderヘッドレス変換スクリプト（テクスチャ再リンクも自動実行）
+│   ├── convert_to_web.py         # Blenderヘッドレス変換スクリプト（テクスチャ再リンクも自動実行）
+│   └── export_vrm.py             # ririka.blend → VRM 1.0（model.vrm）出力スクリプト（別出力経路、詳細はdocs/superpowers/plans/2026-07-10-vrm-export.md）
 ├── source/
 │   └── avatar_idle_mixamo.fbx    # Mixamo経由のアニメーション付きFBX（このファイルを差し替える）
 ├── textures/
 │   └── *.png                     # 実テクスチャPNG（source FBX内の壊れたパスの代わりに使う）
+├── vrm-preview.html               # model.vrmの検証用の使い捨てthree-vrmビューアー（正式な公開ページではない）
 └── README.md                     # このファイル
 ```
 

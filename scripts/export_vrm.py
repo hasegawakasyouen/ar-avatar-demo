@@ -4,9 +4,8 @@
 元の.blendファイルは一切変更しない（save_mainfileを呼ばない）。
 """
 import bpy
+import sys
 
-SOURCE_BLEND = r"D:\VRアバター\アバター\リリカアバター\解凍\身体\ririka_v1.0.9\ririka\ririka.blend"
-OUTPUT_VRM = r"C:\Users\PC_User\Documents\ar-avatar-demo\model.vrm"
 ARMATURE_NAME = "Armature"
 BODY_MESH_NAME = "Body"
 
@@ -97,8 +96,25 @@ BONE_MAPPING = {
 }
 
 
-def open_source_file():
-    bpy.ops.wm.open_mainfile(filepath=SOURCE_BLEND)
+def get_args():
+    argv = sys.argv
+    if "--" not in argv:
+        raise SystemExit(
+            "Usage: blender --background --python export_vrm.py "
+            "-- <source_blend> <output_vrm>"
+        )
+    return argv[argv.index("--") + 1:]
+
+
+def parse_args(args):
+    if len(args) != 2:
+        raise SystemExit("Expected 2 positional args: <source_blend> <output_vrm>")
+    source_blend, output_vrm = args
+    return source_blend, output_vrm
+
+
+def open_source_file(source_blend):
+    bpy.ops.wm.open_mainfile(filepath=source_blend)
 
 
 def get_armature_object():
@@ -163,7 +179,9 @@ def apply_meta(armature_object):
 
 
 if __name__ == "__main__":
-    open_source_file()
+    source_blend, output_vrm = parse_args(get_args())
+
+    open_source_file(source_blend)
     armature_object = get_armature_object()
     apply_bone_mapping(armature_object)
     apply_expression_mapping(armature_object)
@@ -171,7 +189,7 @@ if __name__ == "__main__":
     print("MAPPING_DONE")
 
     result = bpy.ops.export_scene.vrm(
-        filepath=OUTPUT_VRM,
+        filepath=output_vrm,
         armature_object_name=ARMATURE_NAME,
         ignore_warning=True,
         # export_try_sparse_sk（スパースアクセサ）はVRMアドオン内部で
