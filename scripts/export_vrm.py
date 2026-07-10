@@ -182,3 +182,5 @@ if __name__ == "__main__":
         export_try_sparse_sk=True,
     )
     print(f"EXPORT_RESULT: {result}")
+    if result != {'FINISHED'}:
+        raise RuntimeError(f"VRMエクスポートが失敗しました: {result}")

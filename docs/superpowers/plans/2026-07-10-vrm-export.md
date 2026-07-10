@@ -276,9 +276,19 @@ if __name__ == "__main__":
         filepath=OUTPUT_VRM,
         armature_object_name=ARMATURE_NAME,
         ignore_warning=True,
+        # export_try_sparse_sk（スパースアクセサ）はVRMアドオン内部で
+        # enable_advanced_preferences=Trueの配下にゲートされているため
+        # （vrm/exporter/vrm1_exporter.py参照）、単体で渡しても無効化されたまま
+        # 出力される。両方を同時に指定する必要がある。
+        enable_advanced_preferences=True,
+        export_try_sparse_sk=True,
     )
     print(f"EXPORT_RESULT: {result}")
+    if result != {'FINISHED'}:
+        raise RuntimeError(f"VRMエクスポートが失敗しました: {result}")
 ```
+
+`export_try_sparse_sk`はBlenderの実装上`enable_advanced_preferences`とセットでないと効かない（`vrm/exporter/vrm1_exporter.py`で確認）。有効化前は313MB、有効化後は109MBだった。
 
 - [ ] **Step 4: 実行してVRMファイルが生成されることを確認する**
 
