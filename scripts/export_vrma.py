@@ -105,6 +105,34 @@ def apply_retarget_constraints(ririka_armature, mixamo_armature):
         raise RuntimeError(f"以下のボーンが見つかりません: {missing}")
 
 
+def bake_retarget_animation(ririka_armature, frame_start, frame_end):
+    """Copy Rotationコンストレイントで駆動されているポーズを、
+    ririka_armature自身の実キーフレームへベイクする。
+    VRMAエクスポータ(vrm_animation_exporter.py)はarmature自身の
+    animation_data.actionしか読まず、他オブジェクトを指すコンストレイントは
+    一切評価しないため、このベイクなしではモーションデータが0件のまま出力される。
+    """
+    bpy.context.view_layer.objects.active = ririka_armature
+    ririka_armature.select_set(True)
+    bpy.ops.object.mode_set(mode='POSE')
+    bpy.ops.pose.select_all(action='DESELECT')
+    for ririka_bone_name in RETARGET_MAP.values():
+        pb = ririka_armature.pose.bones.get(ririka_bone_name)
+        if pb:
+            pb.select = True
+    bpy.ops.nla.bake(
+        frame_start=frame_start,
+        frame_end=frame_end,
+        only_selected=True,
+        visual_keying=True,
+        clear_constraints=True,
+        clear_parents=False,
+        use_current_action=False,
+        bake_types={'POSE'},
+    )
+    bpy.ops.object.mode_set(mode='OBJECT')
+
+
 if __name__ == "__main__":
     ririka_blend, mixamo_fbx, output_vrma = parse_args(get_args())
 
@@ -114,6 +142,7 @@ if __name__ == "__main__":
     mixamo_armature = import_mixamo_animation(mixamo_fbx)
     set_frame_range_from_action(mixamo_armature)
     apply_retarget_constraints(ririka_armature, mixamo_armature)
+    bake_retarget_animation(ririka_armature, bpy.context.scene.frame_start, bpy.context.scene.frame_end)
     print("RETARGET_SETUP_DONE")
 
     result = bpy.ops.export_scene.vrma(
