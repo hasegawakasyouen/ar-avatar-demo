@@ -174,5 +174,11 @@ if __name__ == "__main__":
         filepath=OUTPUT_VRM,
         armature_object_name=ARMATURE_NAME,
         ignore_warning=True,
+        # export_try_sparse_sk（スパースアクセサ）はVRMアドオン内部で
+        # enable_advanced_preferences=Trueの配下にゲートされているため
+        # （vrm/exporter/vrm1_exporter.py参照）、単体で渡しても無効化されたまま
+        # 出力される。両方を同時に指定する必要がある。
+        enable_advanced_preferences=True,
+        export_try_sparse_sk=True,
     )
     print(f"EXPORT_RESULT: {result}")
