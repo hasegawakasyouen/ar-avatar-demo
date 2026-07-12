@@ -35,6 +35,23 @@ Armatureオブジェクト自身の変形も単位行列へ適用する（transf
 単独では上記バグを解決しないが、Blender公式が推奨するglTFエクスポート前の
 一般的なベストプラクティスであり、メッシュのmatrix_parent_inverseを
 Blenderが自動調整するため副作用もない。
+
+ブランチ全体レビュー＋ユーザーのスクリーンショットによる実機確認で発覚した
+不具合の修正: 元のVRChatアバターFBXには、Humanoidボディ本体とは無関係な
+「小道具/UIギズモ」メッシュが多数（お絵描きタブレット風UI、モニター/ネオン
+パネル、スマホ、食べ物・飲み物の小道具、ジェスチャー検出用Contact Receiverの
+球体ギズモ等）含まれており、これらは元のVRChat/Unity側ではAnimatorレイヤーの
+切り替えやエディタ専用表示で通常は非表示のはずだが、VRMエクスポート後は
+常時表示のジオメトリとしてそのまま出力されてしまっていた。特に`Background`
+という平面クアッドがキャラクターの顔正面を覆い、`Sphere_6`〜`Sphere_15`が
+肩の高さで左右に浮くなど、見た目を著しく損なっていた。
+全77メッシュオブジェクトを頂点数・ワールド座標・親オブジェクト・Armature
+モディファイア有無で監査し、疑わしいものは単体ハイライトレンダリングで
+視覚確認した上で、`hide_prop_meshes()`が対象メッシュの`hide_render`・
+`hide_viewport`を両方Trueにする。VRM Add-onのエクスポート対象選定
+（`export_invisibles`が未指定でFalseのまま）は`Object.visible_get()`
+（hide_viewport依存）でオブジェクトを除外するため、実際に効いているのは
+hide_viewport側だが、意図を一貫させるためhide_renderも合わせて設定する。
 """
 import math
 import sys
@@ -44,6 +61,74 @@ import mathutils
 
 ARMATURE_NAME = "Hips"
 HUMANOID_CHAIN_ROOTS = ["Spine", "Upperleg_L", "Upperleg_R"]
+
+# 実機検証（three-vrm、ユーザーのスクリーンショットによる目視確認）で判明:
+# 元のVRChatアバターにはHumanoidボディ本体とは無関係な「小道具/UIギズモ」の
+# メッシュオブジェクトが多数含まれており、これらがVRMエクスポート後は
+# 常時表示のジオメトリとしてそのまま出力されてしまう（元のVRChat/Unity側では
+# Animatorのレイヤー切り替えやエディタ専用表示で通常は隠れているか、
+# ユーザーが手動でオンにするギミックだった）。
+# 全77メッシュオブジェクトをBlender上で頂点数・ワールド座標バウンディングボックス・
+# 親オブジェクト・Armatureモディファイア有無で監査し、実際にオブジェクトを
+# 単体でハイライトレンダリングして視覚確認した上で、以下を「本体と無関係な
+# 小道具/UIメッシュ」と判定した（本体・衣装・髪・アクセサリー等の
+# Humanoidメッシュは一切含まない。判定基準: 親がArmature直下の
+# オブジェクトペアレントではなくボーン親のみ、かつArmatureモディファイアを
+# 持たない＝スキニングされていない）。
+PROP_MESH_NAMES_TO_HIDE = [
+    # --- お絵描きタブレット風UIギミック（顔の正面付近に配置された平面パネル群） ---
+    "Background",  # 顔の正面を覆う大きな平面クアッド（実機検証で顔を覆っていた元凶）
+    "ColorBar",
+    "Palette",
+    "PaletteIcon",
+    "Pen",
+    "Pen_Eraser_L",
+    "Pen_Eraser_R",
+    "Eraser_1",
+    "Close",
+    # --- モニター/ネオンパネル風UI（顔正面に別途重なる大型パネル、単体レンダリングで確認済み） ---
+    "Cl_Monitor",
+    "Map_Monitor",
+    "_1_1",
+    "_2_1",
+    "_3",
+    "noise_panel_1",
+    # --- アバター調整用デバッグ/技術的ギズモ（本体形状ではない平面メッシュ） ---
+    "AvatarHight",  # 頭上z=1.51に浮く身長確認用マーカー（4頂点の平面）
+    "AntiCulling",  # VRChat側のカリング対策トリックメッシュ、VRM上では無意味な残骸ジオメトリ
+    # --- スマホ/カメラ小道具 ---
+    "Photo_camera",
+    "phone_1",
+    "phone_3",
+    "phone_001",
+    "phone_001_1",
+    "phone_002",
+    "phone_002_1",
+    "phone_003",
+    "reset",  # phone_2配下のリセットボタンUI
+    # --- 食べ物/飲み物の小道具 ---
+    "doughnut1",
+    "doughnut2",
+    "doughnut3",
+    "doughnut4",
+    "can_drink",
+    "can_drink1",
+    "can_drink2",
+    "can_drink3",
+    "can_drink4",
+    "candy_2",
+    # --- ジェスチャー検出用Contact Receiverギズモの球体（肩の高さで左右に浮く） ---
+    "Sphere_6",
+    "Sphere_7",
+    "Sphere_8",
+    "Sphere_9",
+    "Sphere_10",
+    "Sphere_11",
+    "Sphere_12",
+    "Sphere_13",
+    "Sphere_14",
+    "Sphere_15",
+]
 
 
 def get_args():
@@ -192,6 +277,37 @@ def unparent_skinned_meshes(armature_object):
     return targets
 
 
+def hide_prop_meshes():
+    """PROP_MESH_NAMES_TO_HIDEに列挙した「本体と無関係な小道具/UIメッシュ」を
+    hide_render・hide_viewportの両方でTrueにする。
+
+    VRM Add-onのエクスポート対象オブジェクト選定ロジック
+    （editor/search.py の export_objects()）は、export_invisiblesが
+    Falseの場合（本パイプラインのデフォルト、export_vrm_ririka_kaihen.pyでも
+    未指定のためFalseのまま）、Object.visible_get()がFalseのオブジェクトを
+    除外する。visible_get()はhide_viewportの状態（および所属コレクションの
+    hide_viewport）に依存するため、実際にエクスポートから除外するために
+    必須なのはhide_viewport=Trueである。hide_renderはこのフィルタには
+    使われないが、「レンダリング/エクスポートに含めない」という意図を
+    Blender上のUIでも一貫して示すため、あわせてTrueにしておく。
+    """
+    missing = []
+    hidden = []
+    for name in PROP_MESH_NAMES_TO_HIDE:
+        obj = bpy.data.objects.get(name)
+        if obj is None or obj.type != 'MESH':
+            missing.append(name)
+            continue
+        obj.hide_render = True
+        obj.hide_viewport = True
+        hidden.append(name)
+
+    if missing:
+        raise RuntimeError(f"以下の小道具/UIメッシュが見つかりません: {missing}")
+
+    return hidden
+
+
 if __name__ == "__main__":
     source_fbx, output_blend = parse_args(get_args())
 
@@ -210,6 +326,9 @@ if __name__ == "__main__":
 
     unparented = unparent_skinned_meshes(armature_object)
     print(f"UNPARENTED_SKINNED_MESHES: {len(unparented)}")
+
+    hidden_props = hide_prop_meshes()
+    print(f"HIDDEN_PROP_MESHES: {len(hidden_props)}")
 
     bpy.ops.wm.save_as_mainfile(filepath=output_blend)
     print(f"SAVED: {output_blend}")
