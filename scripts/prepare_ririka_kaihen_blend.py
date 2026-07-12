@@ -52,6 +52,30 @@ Blenderが自動調整するため副作用もない。
 （`export_invisibles`が未指定でFalseのまま）は`Object.visible_get()`
 （hide_viewport依存）でオブジェクトを除外するため、実際に効いているのは
 hide_viewport側だが、意図を一貫させるためhide_renderも合わせて設定する。
+
+relink_broken_textures()でマゼンタのプレースホルダーを解消した後も、参考
+画像（黒地に白トリムのゴシックドレス）と逆に衣装が白/クリーム色優勢に見える
+問題が残っていた。実機検証（Base ColorをEmissionへ一時直結したunlitレンダー
+でTex_Black.pngが黒地に白花柄レースという正しい配色を持つことを確認、UV
+バウンディングボックスとピクセルサンプリングでUVマッピング自体は正常と確認、
+material blend_method/alpha配線も概ね正常と確認）で切り分けた結果、真因は
+UV・テクスチャのいずれでもなく、Mat_BlackVeil1〜4・Mat_WhiteVeil・Hair・
+_3_Peach_Glow_Bob/Twin・Diamond・pearlの10マテリアルでPrincipled BSDFの
+"Emission Color"が白(1,1,1,1)・"Emission Strength"が1.0のまま定数値で
+残っていたことだった。これはUnity側マテリアルの"_EmissionColor"プロパティが
+白のデフォルト値のまま残っている一方、Unity側では_EMISSIONキーワード自体が
+無効化されていて実際には発光していなかった（Unityのシェーダはキーワード
+無効時にプロパティ値を無視する）のが、FBXエクスポート/Blenderインポート時に
+キーワードの有効・無効という文脈情報が失われ、プロパティの生値だけが
+Principled BSDFのEmissionにそのままコピーされてしまった「幽霊発光」と判断
+した（同じアバター内の他の"*_LLC_Clone_"マテリアル、例えばMat_Clothes/
+Mat_Furball/Mat_Silk等はEmission Strength=0.0で正常なため、テクスチャや
+命名規則が原因ではなくマテリアルごとに個別に持っていた値の違いであることを
+確認済み）。定数の白色フル発光がBase Colorの上に単純加算されるため、本来
+黒いはずのレース生地が白く洗い流されたように見えていた。`fix_phantom_emission()`
+がこの10マテリアルのEmission Strengthを0.0にリセットする。実機検証（Blender
+単体/合成レンダリング比較）で、この修正だけで参考画像どおりの黒地に白トリムの
+配色に戻ることを確認済み。
 """
 import math
 import os
@@ -94,6 +118,48 @@ REAL_TEX_BLACK_PATH = (
 TEX_BLACK_PREFIX = "Tex_Black_llc_"
 UNITY_WHITE_PREFIX = "UnityWhite_llc_"
 ZZZ_GENERATED_ASSETS_MARKER = "ZZZ_GeneratedAssets"
+
+# 実機検証（Blender 5.1、Emissionを一時的にColor出力へ直結したunlitレンダー、
+# 単体/合成レンダリング比較、three-vrmでの実機確認）で判明した第2の不具合の修正対象。
+#
+# relink_broken_textures()で壊れたテクスチャ参照を修復しマゼンタが解消した後も、
+# 「黒猫悪夢」衣装（Dress/Dress2/Dress3/Sleevesメッシュ）が参考画像とは逆に
+# 白/クリーム色優勢に見える問題が残っていた。原因はテクスチャ・UV・material
+# blend_methodのいずれでもなかった（Base ColorをEmissionに直結してライティング
+# を排除したunlitレンダーでは、Tex_Black.pngを正しくサンプリングした黒地に
+# 白い花柄レース模様という、参考画像どおりの配色が正しく出ることを確認済み）。
+#
+# 真因: 以下10マテリアルのPrincipled BSDFの"Emission Color"が白(1,1,1,1)・
+# "Emission Strength"が1.0のまま、いずれのソケットもテクスチャに接続されて
+# いない（定数値）状態だった。これはUnity側マテリアルの"_EmissionColor"
+# プロパティが白のデフォルト値のまま残っている一方、Unity側では_EMISSION
+# キーワード自体が無効化されていて実際には発光していなかった（Unityの
+# シェーダはキーワード無効時にプロパティ値を無視する）のが、FBXエクスポート/
+# Blenderインポート時にキーワードの有効・無効という文脈情報が失われ、
+# プロパティの生値だけがPrincipled BSDFのEmissionにそのままコピーされて
+# しまったための「幽霊発光」であると判断した（同じ黒猫悪夢アバター内の
+# 他の"*_LLC_Clone_"マテリアル、例えばMat_Clothes/Mat_Furball/Mat_Silk等は
+# Emission Strength=0.0で正常なため、テクスチャや命名規則が原因ではなく
+# マテリアルごとに個別に持っていた値の違いであることを確認済み）。
+#
+# 定数の白色フル発光（Strength=1.0）がBase Colorの上に単純加算されるため、
+# 本来黒いはずのレース生地が白く洗い流されたように見えていた。実機検証
+# （Blender単体レンダリング比較）で、この10マテリアルのEmission Strengthを
+# 0.0にするだけで、参考画像どおりの黒地に白トリムの配色に戻ることを確認済み。
+# "Dress/Dress2/Dress3/Sleeves"の範囲外（Hair・アクセサリー等）でも同一の
+# 幽霊発光パターンを持つマテリアルは、同じ原因である以上まとめて修正する。
+PHANTOM_EMISSION_MATERIAL_NAMES = [
+    "Mat_BlackVeil1_LLC_Clone_",
+    "Mat_BlackVeil2_LLC_Clone_",
+    "Mat_BlackVeil3_LLC_Clone_",
+    "Mat_BlackVeil4_LLC_Clone_",
+    "Mat_WhiteVeil_LLC_Clone_",
+    "Hair_LLC_Clone_",
+    "_3_Peach_Glow_Bob_LLC_Clone_",
+    "_3_Peach_Glow_Twin_LLC_Clone_",
+    "Diamond_LLC_Clone_",
+    "pearl_LLC_Clone_",
+]
 
 # 実機検証（Blender上で単体ハイライトレンダリング、材質ノード比較）で確認済み:
 # 以下5メッシュは壊れたテクスチャ参照ではなく、正しく実ファイル
@@ -501,6 +567,77 @@ def relink_broken_textures():
     return relinked_to_black, whited_out, ignored_hidden_only
 
 
+def fix_phantom_emission():
+    """PHANTOM_EMISSION_MATERIAL_NAMESに列挙したマテリアルについて、
+    Principled BSDFの"Emission Strength"入力がテクスチャ等に接続されておらず
+    （定数値）、かつ0より大きい場合にのみ0.0へリセットする。
+
+    実機検証（Base ColorをEmissionへ一時的に直結したunlitレンダーとの比較、
+    Emission Strengthを0にしただけの単体レンダリング比較）で、この処理だけで
+    黒地に白トリムという参考画像どおりの配色に戻ることを確認済み。Emission
+    Colorそのものは変更しない（Strength=0であれば寄与はゼロになるため十分で、
+    元データを不必要に破壊しないため）。
+
+    呼び出し前提: relink_broken_textures()実行後（本関数はEmission関連の
+    ソケットのみを扱うため実際には呼び出し順に依存しないが、一貫性のため
+    このタイミングで呼ぶ）。
+    """
+    missing = []
+    fixed = []
+    already_zero = []
+    unexpected_linked = []
+
+    for mat_name in PHANTOM_EMISSION_MATERIAL_NAMES:
+        mat = bpy.data.materials.get(mat_name)
+        if mat is None or mat.node_tree is None:
+            missing.append(mat_name)
+            continue
+
+        bsdf = None
+        for node in mat.node_tree.nodes:
+            if node.type == 'BSDF_PRINCIPLED':
+                bsdf = node
+                break
+        if bsdf is None:
+            missing.append(mat_name)
+            continue
+
+        strength_socket = bsdf.inputs.get('Emission Strength')
+        if strength_socket is None:
+            missing.append(mat_name)
+            continue
+
+        if strength_socket.is_linked:
+            # テクスチャ駆動のEmissionは想定外パターン（幽霊発光の定数値ケースとは
+            # 別物の可能性が高い）。誤って正当なEmissionを壊さないよう手動調査を促す。
+            unexpected_linked.append(mat_name)
+            continue
+
+        if strength_socket.default_value > 0.0:
+            strength_socket.default_value = 0.0
+            fixed.append(mat_name)
+        else:
+            already_zero.append(mat_name)
+
+    if missing:
+        raise RuntimeError(f"以下のマテリアル/Principled BSDF/Emission Strengthソケットが見つかりません: {missing}")
+    if unexpected_linked:
+        raise RuntimeError(
+            f"以下のマテリアルはEmission Strengthがテクスチャに接続されており、"
+            f"想定していた定数の幽霊発光パターンと異なります。手動調査が必要です: {unexpected_linked}"
+        )
+
+    print(f"PHANTOM_EMISSION_FIXED: {len(fixed)}")
+    for name in fixed:
+        print(f"  {name}")
+    if already_zero:
+        print(f"PHANTOM_EMISSION_ALREADY_ZERO: {len(already_zero)}")
+        for name in already_zero:
+            print(f"  {name}")
+
+    return fixed
+
+
 if __name__ == "__main__":
     source_fbx, output_blend = parse_args(get_args())
 
@@ -527,6 +664,8 @@ if __name__ == "__main__":
     print(f"HIDDEN_DEFAULT_OUTFIT_MESHES: {len(hidden_default_outfit)}")
 
     relink_broken_textures()
+
+    fix_phantom_emission()
 
     bpy.ops.wm.save_as_mainfile(filepath=output_blend)
     print(f"SAVED: {output_blend}")
