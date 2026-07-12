@@ -54,6 +54,7 @@ Blenderが自動調整するため副作用もない。
 hide_viewport側だが、意図を一貫させるためhide_renderも合わせて設定する。
 """
 import math
+import os
 import sys
 
 import bpy
@@ -61,6 +62,52 @@ import mathutils
 
 ARMATURE_NAME = "Hips"
 HUMANOID_CHAIN_ROOTS = ["Spine", "Upperleg_L", "Upperleg_R"]
+
+# 実機検証（Blender 5.1でsource/ririka_kaihen.blendを開き、全マテリアルの
+# TEX_IMAGEノードを監査）で判明: 「りりか 黒猫悪夢」の一部マテリアルは、
+# Diffuse/Base ColorのTEX_IMAGEノードがUnity内部の".asset"でラップされた
+# ランタイム専用テクスチャファイル（ZZZ_GeneratedAssets配下の*_llc_*.asset）を
+# 参照しており、Blenderはこれをデコードできない
+# （IMB_load_image_from_memory: unknown file-format、Image.size==(0,0)）。
+# その結果、該当メッシュ（黒衣装の本体パーツ）がBlenderの標準マゼンタ/ピンク色の
+# 「テクスチャ読み込み失敗」プレースホルダーで描画され、まるで別の
+# ピンク系デフォルト衣装であるかのように見えていた。実際は別衣装ではなく
+# 単なるテクスチャ参照切れであることを、同じ役割の他マテリアル
+# （Mat_BlackVeil2_LLC_Clone_等）が正しく実ファイルTex_Black.pngを
+# 参照して黒く描画されることと比較して確認済み。
+#
+# 壊れた参照は2パターンに分類される:
+# 1. "Tex_Black_llc_*.asset" -> 実体は黒テクスチャ
+#    D:\...\Assets\PuffyNightmare\Materials&Textures\Texture\A_Black&White\Tex_Black.png
+#    と同一内容（同じ役割の他マテリアルが実際にこのファイルを正しく参照している
+#    ことから確認）。
+# 2. "UnityWhite_llc_*.asset" -> lilycalinventoryの内部規約と見られる
+#    「テクスチャなし、フラット白のみ」を意味するプレースホルダー
+#    （Unityプロジェクト内に対応する実ファイルが存在しない）。
+#    画像を差し替える代わりに、TEX_IMAGEノードのColor出力の接続を切り、
+#    接続先（実測では全ケースでPrincipled BSDFのBase Color）の
+#    default_valueに直接白(1,1,1,1)を設定することで対応する。
+REAL_TEX_BLACK_PATH = (
+    r"D:\VRChatCreatorCompanion\VRChatProjects\りりか　黒猫悪夢\Assets"
+    r"\PuffyNightmare\Materials&Textures\Texture\A_Black&White\Tex_Black.png"
+)
+TEX_BLACK_PREFIX = "Tex_Black_llc_"
+UNITY_WHITE_PREFIX = "UnityWhite_llc_"
+ZZZ_GENERATED_ASSETS_MARKER = "ZZZ_GeneratedAssets"
+
+# 実機検証（Blender上で単体ハイライトレンダリング、材質ノード比較）で確認済み:
+# 以下5メッシュは壊れたテクスチャ参照ではなく、正しく実ファイル
+# （cloth1.png / Cloth.png、いずれもTex_Black.pngとは無関係な別の白/グレー系
+# カジュアル私服テクスチャ）を参照して正常に読み込まれている「本物の」
+# もう一つのデフォルト衣装（カーディガン+スニーカー、ブラウス+スカート風）。
+# 参考画像の黒ゴシック「黒猫」衣装とは別物のため、VRM出力から除外する。
+DEFAULT_OUTFIT_MESH_NAMES_TO_HIDE = [
+    "Outer",
+    "Boots",
+    "Cloth",
+    "cover_arm",
+    "Over_knee_socks",
+]
 
 # 実機検証（three-vrm、ユーザーのスクリーンショットによる目視確認）で判明:
 # 元のVRChatアバターにはHumanoidボディ本体とは無関係な「小道具/UIギズモ」の
@@ -308,6 +355,152 @@ def hide_prop_meshes():
     return hidden
 
 
+def hide_default_outfit_meshes():
+    """DEFAULT_OUTFIT_MESH_NAMES_TO_HIDEに列挙した「本物の別デフォルト私服」を
+    hide_render・hide_viewportの両方でTrueにする。hide_prop_meshes()と同じ理由
+    （VRM Add-onのexport_objects()がvisible_get()==FalseのオブジェクトをVRM出力
+    から除外する）でhide_viewportが実効的な設定であり、hide_renderは意図表示のため
+    あわせて設定する。
+    """
+    missing = []
+    hidden = []
+    for name in DEFAULT_OUTFIT_MESH_NAMES_TO_HIDE:
+        obj = bpy.data.objects.get(name)
+        if obj is None or obj.type != 'MESH':
+            missing.append(name)
+            continue
+        obj.hide_render = True
+        obj.hide_viewport = True
+        hidden.append(name)
+
+    if missing:
+        raise RuntimeError(f"以下のデフォルト私服メッシュが見つかりません: {missing}")
+
+    return hidden
+
+
+def _is_export_visible(obj):
+    """hide_prop_meshes()/hide_default_outfit_meshes()適用後の状態で、
+    このオブジェクトがVRMエクスポート対象に含まれるか（=hide_viewportが
+    Falseか）を返す。壊れたテクスチャ参照が非表示メッシュにしか
+    影響していない場合は実害がないため、relink_broken_textures()の
+    未知パターン検出時にこの情報で警告と致命的エラーを切り分ける。
+    """
+    return not obj.hide_viewport
+
+
+def relink_broken_textures():
+    """全マテリアルのTEX_IMAGEノードを走査し、image.size==(0, 0)
+    （＝Blenderがデコードできず読み込みに失敗した）かつファイルパスが
+    ZZZ_GeneratedAssets配下の"*_llc_*.asset"（Unity内部ランタイム専用
+    テクスチャのラッパー）に一致するものを検出し、以下のルールで修復する。
+
+    - ファイル名が"Tex_Black_llc_"で始まる場合:
+      実体である黒テクスチャの実ファイル（REAL_TEX_BLACK_PATH）を読み込み、
+      ノードのimageをそれに差し替える。
+    - ファイル名が"UnityWhite_llc_"で始まる場合:
+      画像を差し替える対応する実ファイルがUnityプロジェクト内に存在しない
+      （lilycalinventoryの「テクスチャなし・フラット白」内部規約と判断）。
+      そのため、TEX_IMAGEノードのColor/Alpha出力から接続を切り、接続先
+      ソケット（実機調査では全ケースでPrincipled BSDFのBase Color）の
+      default_valueに白(1.0, 1.0, 1.0, 1.0)を直接設定する。
+    - 上記いずれにも一致しない未知のパターンの場合:
+      そのマテリアルを使用するオブジェクトが1つでもエクスポート対象
+      （hide_viewport=False）に含まれるならRuntimeErrorで停止し、手動調査を促す。
+      非表示の小道具メッシュのみが使用している場合はVRM出力に影響しないため、
+      警告を出力するだけで処理を続行する（実機調査で確認済みの実例:
+      "resettex_llc_*.asset"は非表示化済みの"reset"小道具メッシュのみが使用）。
+
+    呼び出し前提: hide_prop_meshes()・hide_default_outfit_meshes()を先に
+    実行し、各メッシュのhide_viewportを確定させておくこと。
+    """
+    real_tex_black_image = None
+
+    relinked_to_black = []
+    whited_out = []
+    ignored_hidden_only = []
+
+    for mat in bpy.data.materials:
+        if mat.node_tree is None:
+            continue
+        for node in list(mat.node_tree.nodes):
+            if node.type != 'TEX_IMAGE' or node.image is None:
+                continue
+            image = node.image
+            if tuple(image.size) != (0, 0) or image.source == 'VIEWER':
+                continue  # 正常に読み込めている（またはRender Result等の特殊画像）
+
+            filepath = image.filepath
+            basename = os.path.basename(filepath) if filepath else ""
+
+            if ZZZ_GENERATED_ASSETS_MARKER not in filepath or "_llc_" not in basename or not basename.endswith(".asset"):
+                # 対象パターン（ZZZ_GeneratedAssets配下の*_llc_*.asset）に
+                # 一致しない壊れた画像。実機調査で確認済み: これらは
+                # phone tex.renderTexture・Map_Texture.renderTexture等、
+                # いずれも小道具/UIギズモ専用の別種の壊れた参照であり、
+                # 本タスクのスコープ外（hide_prop_meshes()で既に非表示化される
+                # メッシュのみが使用）。
+                continue
+
+            # このノードを使っているオブジェクトを特定し、非表示専用かどうか判定
+            using_objects = [
+                obj for obj in bpy.data.objects
+                if obj.type == 'MESH' and any(slot.material is mat for slot in obj.material_slots)
+            ]
+
+            if basename.startswith(TEX_BLACK_PREFIX):
+                if real_tex_black_image is None:
+                    real_tex_black_image = bpy.data.images.load(REAL_TEX_BLACK_PATH, check_existing=True)
+                    if tuple(real_tex_black_image.size) == (0, 0):
+                        raise RuntimeError(
+                            f"黒テクスチャの実ファイルが読み込めませんでした: {REAL_TEX_BLACK_PATH}"
+                        )
+                node.image = real_tex_black_image
+                relinked_to_black.append((mat.name, node.name, basename))
+
+            elif basename.startswith(UNITY_WHITE_PREFIX):
+                for out_name in ('Color', 'Alpha'):
+                    out_socket = node.outputs.get(out_name)
+                    if out_socket is None:
+                        continue
+                    fill_value = (1.0, 1.0, 1.0, 1.0) if out_name == 'Color' else 1.0
+                    for link in list(out_socket.links):
+                        to_socket = link.to_socket
+                        mat.node_tree.links.remove(link)
+                        try:
+                            to_socket.default_value = fill_value
+                        except TypeError:
+                            # スカラーソケットにColorの4要素を代入しようとした場合等の
+                            # 型不一致に備えたフォールバック（実機調査では未発生）。
+                            to_socket.default_value = fill_value[0] if out_name == 'Color' else fill_value
+                whited_out.append((mat.name, node.name, basename))
+
+            else:
+                still_visible = [obj.name for obj in using_objects if _is_export_visible(obj)]
+                if still_visible:
+                    raise RuntimeError(
+                        f"未知パターンの壊れたテクスチャ参照がエクスポート対象メッシュに"
+                        f"影響しています。手動調査が必要です: material={mat.name} "
+                        f"node={node.name} file={basename} affected_objects={still_visible}"
+                    )
+                ignored_hidden_only.append((mat.name, node.name, basename,
+                                             [obj.name for obj in using_objects]))
+
+    print(f"RELINKED_TO_BLACK: {len(relinked_to_black)}")
+    for mat_name, node_name, basename in relinked_to_black:
+        print(f"  {mat_name} / {node_name} <- {basename}")
+
+    print(f"WHITED_OUT: {len(whited_out)}")
+    for mat_name, node_name, basename in whited_out:
+        print(f"  {mat_name} / {node_name} <- {basename}")
+
+    print(f"IGNORED_UNKNOWN_PATTERN_HIDDEN_ONLY: {len(ignored_hidden_only)}")
+    for mat_name, node_name, basename, objs in ignored_hidden_only:
+        print(f"  {mat_name} / {node_name} <- {basename} (objects: {objs}, all hidden)")
+
+    return relinked_to_black, whited_out, ignored_hidden_only
+
+
 if __name__ == "__main__":
     source_fbx, output_blend = parse_args(get_args())
 
@@ -329,6 +522,11 @@ if __name__ == "__main__":
 
     hidden_props = hide_prop_meshes()
     print(f"HIDDEN_PROP_MESHES: {len(hidden_props)}")
+
+    hidden_default_outfit = hide_default_outfit_meshes()
+    print(f"HIDDEN_DEFAULT_OUTFIT_MESHES: {len(hidden_default_outfit)}")
+
+    relink_broken_textures()
 
     bpy.ops.wm.save_as_mainfile(filepath=output_blend)
     print(f"SAVED: {output_blend}")
