@@ -9,25 +9,50 @@ import bpy
 ARMATURE_NAME = "Hips"
 BODY_MESH_NAME = "Body"
 
+# Task 3の目視確認で判明: angry/sadの単体シェイプキーは変位量が極めて小さく
+# （実測 平均頂点変位: angry単体=0.005、sad単体=0.015、対してhappy単体=0.070・
+# narrow=0.125）、レンダリングでほぼ無表情に見えるほど弱かった。また眉毛系の
+# シェイプキー（brow_angry等）は前髪に隠れて視認できないため、目のシェイプ
+# （narrow・eyelid_upper_tare・eyelid_lower_tare）と口のシェイプ（mouth_down）を
+# 中心に構成を強化した。PRESET_EXPRESSION_MAPPINGは元の単一タプル構造では
+# 複数シェイプキーを合成できないため、CUSTOM_EXPRESSION_MAPPINGと同じ
+# リスト構造に統一した（apply_expression_mappingもそれに合わせて変更）。
 PRESET_EXPRESSION_MAPPING = {
-    "happy": (BODY_MESH_NAME, "happy"),
-    "angry": (BODY_MESH_NAME, "angry"),
-    "sad": (BODY_MESH_NAME, "sad"),
-    "relaxed": (BODY_MESH_NAME, "nagomi"),
-    "surprised": (BODY_MESH_NAME, "びっくり"),
-    "aa": (BODY_MESH_NAME, "vrc.v_aa"),
-    "ih": (BODY_MESH_NAME, "vrc.v_ih"),
-    "ou": (BODY_MESH_NAME, "vrc.v_ou"),
-    "ee": (BODY_MESH_NAME, "vrc.v_e"),
-    "oh": (BODY_MESH_NAME, "vrc.v_oh"),
-    "blink": (BODY_MESH_NAME, "blink"),
-    "blink_left": (BODY_MESH_NAME, "blink_L"),
-    "blink_right": (BODY_MESH_NAME, "blink_R"),
+    "happy": [
+        (BODY_MESH_NAME, "happy"),
+        (BODY_MESH_NAME, "brow_smile"),
+        (BODY_MESH_NAME, "mouth_smile"),
+    ],
+    "angry": [
+        (BODY_MESH_NAME, "angry"),
+        (BODY_MESH_NAME, "brow_angry"),
+        (BODY_MESH_NAME, "narrow"),
+    ],
+    "sad": [
+        (BODY_MESH_NAME, "sad"),
+        (BODY_MESH_NAME, "mouth_down"),
+        (BODY_MESH_NAME, "eyelid_upper_tare"),
+        (BODY_MESH_NAME, "eyelid_lower_tare"),
+        (BODY_MESH_NAME, "brow_down"),
+    ],
+    "relaxed": [(BODY_MESH_NAME, "nagomi")],
+    "surprised": [(BODY_MESH_NAME, "びっくり")],
+    "aa": [(BODY_MESH_NAME, "vrc.v_aa")],
+    "ih": [(BODY_MESH_NAME, "vrc.v_ih")],
+    "ou": [(BODY_MESH_NAME, "vrc.v_ou")],
+    "ee": [(BODY_MESH_NAME, "vrc.v_e")],
+    "oh": [(BODY_MESH_NAME, "vrc.v_oh")],
+    "blink": [(BODY_MESH_NAME, "blink")],
+    "blink_left": [(BODY_MESH_NAME, "blink_L")],
+    "blink_right": [(BODY_MESH_NAME, "blink_R")],
 }
 
 CUSTOM_EXPRESSION_MAPPING = {
     "crying": [
         (BODY_MESH_NAME, "sad"),
+        (BODY_MESH_NAME, "mouth_down"),
+        (BODY_MESH_NAME, "eyelid_upper_tare"),
+        (BODY_MESH_NAME, "eyelid_lower_tare"),
         (BODY_MESH_NAME, "tear1"),
         (BODY_MESH_NAME, "tear2"),
     ],
@@ -153,9 +178,10 @@ def _add_morph_target_bind(expression, mesh_name, shape_key_name):
 def apply_expression_mapping(armature_object):
     expressions = armature_object.data.vrm_addon_extension.vrm1.expressions
 
-    for preset_name, (mesh_name, shape_key_name) in PRESET_EXPRESSION_MAPPING.items():
+    for preset_name, binds in PRESET_EXPRESSION_MAPPING.items():
         expression = getattr(expressions.preset, preset_name)
-        _add_morph_target_bind(expression, mesh_name, shape_key_name)
+        for mesh_name, shape_key_name in binds:
+            _add_morph_target_bind(expression, mesh_name, shape_key_name)
 
     for custom_name, binds in CUSTOM_EXPRESSION_MAPPING.items():
         custom_expression = expressions.custom.add()
