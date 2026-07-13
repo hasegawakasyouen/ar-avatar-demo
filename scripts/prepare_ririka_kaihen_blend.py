@@ -81,6 +81,7 @@ import math
 import os
 import sys
 
+import bmesh
 import bpy
 import mathutils
 
@@ -188,6 +189,21 @@ MIXED_IN_MESH_NAMES_TO_HIDE = [
     "pet",  # スケール0で全次元dims=0の死にジオメトリ（3146ポリゴンが1点に潰れた状態）。
             # 現状は見えないが、無駄ポリゴン排除と将来の出現防止のため非表示にする
 ]
+
+# 実機検証（three-vrm）で発覚した「ピンクの開いた口」オーバーレイの修正:
+# Bodyメッシュ内の歯（上下）・舌の3アイランドは、幾何学的には唇の奥約9mmに
+# あるが、body_LLC_Clone_マテリアルがalphaMode=BLEND+doubleSidedでエクスポート
+# されるため、three.js側でdepthWrite=falseの透過描画になり、プリミティブ内の
+# 描画順（歯→舌が顔スキンより後）で手前に上書き合成されて見える。
+# Unity/VRChat側ではFXレイヤーが収納シェイプキー（下記3キー）を常時1に保って
+# 口内ポケットへ収納していたが、FBXにはキー値0で入ってくるため常時展開状態
+# だった。収納キーvalue=1のまま保存する方式はエクスポータのウェイト出力と
+# ビューア側のリセット挙動に依存して脆弱なため、該当頂点を物理削除する。
+# 各キーのデルタは該当アイランドの頂点だけを排他的に動かす（他の頂点への
+# 影響ゼロ、実機検証で確認済み）ため、デルタ非0の頂点集合＝削除対象になる。
+MOUTH_STORAGE_SHAPE_KEYS = ["t_upper_off", "t_lower_off", "tang_off"]
+MOUTH_PART_MESH_NAME = "Body"
+EXPECTED_MOUTH_PART_VERTEX_COUNT = 1568  # 上歯569+下歯569+舌430（調査で実測）
 
 # 実機検証（three-vrm、ユーザーのスクリーンショットによる目視確認）で判明:
 # 元のVRChatアバターにはHumanoidボディ本体とは無関係な「小道具/UIギズモ」の
@@ -449,6 +465,48 @@ def hide_mixed_in_meshes():
     return _hide_meshes(MIXED_IN_MESH_NAMES_TO_HIDE, "混入パーツ")
 
 
+def delete_mouth_storage_parts():
+    """MOUTH_STORAGE_SHAPE_KEYSのデルタが非0の頂点（歯・舌のアイランド）を
+    Bodyメッシュから物理削除する。"""
+    obj = bpy.data.objects.get(MOUTH_PART_MESH_NAME)
+    if obj is None or obj.type != 'MESH':
+        raise RuntimeError(f"メッシュオブジェクト'{MOUTH_PART_MESH_NAME}'が見つかりません")
+    me = obj.data
+    if me.shape_keys is None:
+        raise RuntimeError(f"'{MOUTH_PART_MESH_NAME}'にシェイプキーがありません")
+
+    key_blocks = me.shape_keys.key_blocks
+    basis = key_blocks.get('Basis')
+    if basis is None:
+        raise RuntimeError("Basisシェイプキーが見つかりません")
+
+    target_indices = set()
+    for key_name in MOUTH_STORAGE_SHAPE_KEYS:
+        kb = key_blocks.get(key_name)
+        if kb is None:
+            raise RuntimeError(f"収納シェイプキー'{key_name}'が見つかりません")
+        for i in range(len(kb.data)):
+            if (kb.data[i].co - basis.data[i].co).length > 1e-6:
+                target_indices.add(i)
+
+    if len(target_indices) != EXPECTED_MOUTH_PART_VERTEX_COUNT:
+        raise RuntimeError(
+            f"削除対象頂点数が想定と異なります: {len(target_indices)} != "
+            f"{EXPECTED_MOUTH_PART_VERTEX_COUNT}（FBXの構造が変わった可能性。要再調査）"
+        )
+
+    bm = bmesh.new()
+    bm.from_mesh(me)
+    bm.verts.ensure_lookup_table()
+    doomed = [bm.verts[i] for i in sorted(target_indices)]
+    bmesh.ops.delete(bm, geom=doomed, context='VERTS')
+    bm.to_mesh(me)
+    bm.free()
+
+    print(f"MOUTH_STORAGE_PARTS_DELETED: {len(target_indices)} vertices")
+    return len(target_indices)
+
+
 def _is_export_visible(obj):
     """hide_prop_meshes()/hide_default_outfit_meshes()/hide_mixed_in_meshes()
     適用後の状態で、このオブジェクトがVRMエクスポート対象に含まれるか（=hide_viewportが
@@ -670,6 +728,8 @@ if __name__ == "__main__":
 
     hidden_mixed_in = hide_mixed_in_meshes()
     print(f"HIDDEN_MIXED_IN_MESHES: {len(hidden_mixed_in)}")
+
+    delete_mouth_storage_parts()
 
     relink_broken_textures()
 
