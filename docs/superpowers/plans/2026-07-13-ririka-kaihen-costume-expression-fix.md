@@ -397,6 +397,33 @@ Expected: `MOUTH_STORAGE_PARTS_DELETED: 1568 vertices`を含む従来出力＋`S
 
 ---
 
+### Task 2c: 【第3ラウンド改訂】body材質の透過モード修正（口腔壁の描画順問題の根治）
+
+> **改訂の経緯（Task 3の2回目の検証で発覚）**: Task 2bの歯・舌削除は成功したが、ピンクの塊の残りは**口腔壁（口内ポケットの壁）**で、顔スキンと同一連結成分（連結頂点2968）のため頂点削除では対処不可。メカニズムはTask 2bと同一（`body_LLC_Clone_`材質がalphaMode=BLEND+doubleSidedでエクスポートされ、three.jsがdepthWrite=falseで描画するため、プリミティブ内描画順で口腔壁が顔スキンの上に合成される）。**決定的証拠: three.js上で`material.depthWrite=true`にするだけでピンク塊が完全消滅し、正常な閉じ口になる**（`vrm_r2_test_depthwrite.png`）。
+>
+> glTF/VRMの標準アルファモードでは「BLEND+depthWrite」は表現できないため、Blender側で`body_LLC_Clone_`材質の`blend_method`を変更してエクスポートさせる: **第一候補はCLIP（=alphaMode MASK、カットアウト透過は維持）、第二候補はOPAQUE**。どちらが安全かは実際にエクスポート→ブラウザ確認で経験的に決める（同材質を使う目のハイライト層・まつ毛等への副作用が机上では読みきれないため）。
+
+**Files:**
+- Modify: `ar-avatar-demo/scripts/prepare_ririka_kaihen_blend.py`
+
+- [ ] **Step 1: body材質のblend_method変更処理を追加する**
+
+`prepare_ririka_kaihen_blend.py`に、`body_LLC_Clone_`材質の`blend_method`を`'CLIP'`（`alpha_threshold`は0.5）へ変更する関数を追加し、mainの`delete_mouth_storage_parts()`直後に配線する。コメントには上記の経緯（BLEND+depthWrite不可、CLIP第一候補の理由、実測の証拠画像名）を明記する。
+
+- [ ] **Step 2: prepare再実行→export再実行→ブラウザ確認（CLIP版）**
+
+ニュートラルの口が閉じていること、目のハイライト・まつ毛等に副作用（ハードエッジ・欠け）がないことをスクリーンショットで確認。
+
+- [ ] **Step 3: CLIP版に副作用があればOPAQUEへ切り替えて再試行**
+
+CLIPで副作用が出た場合のみ。両方ダメなら BLOCKED（MToon化等の大掛かりな対応の要否はオーケストレーター判断）。
+
+- [ ] **Step 4: 採用した設定でcommit**
+
+コミット対象は`prepare_ririka_kaihen_blend.py`のみ。メッセージ例: `fix: body材質をCLIP透過にして口腔壁の描画順問題を根治`
+
+---
+
 ### Task 3: VRM再エクスポート＋ブラウザ実機検証
 
 **Files:** なし（コード変更なし、アーティファクト再生成と検証のみ）
