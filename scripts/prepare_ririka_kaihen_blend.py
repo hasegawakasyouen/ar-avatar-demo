@@ -175,6 +175,20 @@ DEFAULT_OUTFIT_MESH_NAMES_TO_HIDE = [
     "Over_knee_socks",
 ]
 
+# ユーザーの実見確認（desktop-vrm-mascotでの使用時）で発覚した衣装混在の修正:
+# リファレンス画像（黒猫悪夢衣装: 猫耳＋肉球グローブ＋黒レースドレス＋黒レース
+# ソックス、羽なし）と照合し、メッシュ棚卸し＋単体レンダリング確認で
+# 「リファレンスに存在しない混入パーツ」と判定したメッシュ。
+# 腰の羽状パーツはユーザー確認済みで「本来存在しないパーツ」。
+MIXED_IN_MESH_NAMES_TO_HIDE = [
+    "Bag",  # 「腰の羽」の正体: コウモリ羽付きリュック（単体レンダリングで形状確認済み）。
+            # 材質が隠蔽済みデフォルト私服と同族（cloth1/metal/Diamond/pearl）
+    "cloth_Accessories",  # 隠蔽済み私服「Cloth」の付属アクセサリー一式
+                          # （頭部のミニコウモリ羽クリップ・耳飾り・腰ストリップ）
+    "pet",  # スケール0で全次元dims=0の死にジオメトリ（3146ポリゴンが1点に潰れた状態）。
+            # 現状は見えないが、無駄ポリゴン排除と将来の出現防止のため非表示にする
+]
+
 # 実機検証（three-vrm、ユーザーのスクリーンショットによる目視確認）で判明:
 # 元のVRChatアバターにはHumanoidボディ本体とは無関係な「小道具/UIギズモ」の
 # メッシュオブジェクトが多数含まれており、これらがVRMエクスポート後は
@@ -390,9 +404,8 @@ def unparent_skinned_meshes(armature_object):
     return targets
 
 
-def hide_prop_meshes():
-    """PROP_MESH_NAMES_TO_HIDEに列挙した「本体と無関係な小道具/UIメッシュ」を
-    hide_render・hide_viewportの両方でTrueにする。
+def _hide_meshes(names, label):
+    """指定名のメッシュのhide_render・hide_viewportを両方Trueにする。
 
     VRM Add-onのエクスポート対象オブジェクト選定ロジック
     （editor/search.py の export_objects()）は、export_invisiblesが
@@ -406,7 +419,7 @@ def hide_prop_meshes():
     """
     missing = []
     hidden = []
-    for name in PROP_MESH_NAMES_TO_HIDE:
+    for name in names:
         obj = bpy.data.objects.get(name)
         if obj is None or obj.type != 'MESH':
             missing.append(name)
@@ -416,38 +429,29 @@ def hide_prop_meshes():
         hidden.append(name)
 
     if missing:
-        raise RuntimeError(f"以下の小道具/UIメッシュが見つかりません: {missing}")
+        raise RuntimeError(f"以下の{label}メッシュが見つかりません: {missing}")
 
     return hidden
+
+
+def hide_prop_meshes():
+    """PROP_MESH_NAMES_TO_HIDEに列挙した「本体と無関係な小道具/UIメッシュ」を非表示化する。"""
+    return _hide_meshes(PROP_MESH_NAMES_TO_HIDE, "小道具/UI")
 
 
 def hide_default_outfit_meshes():
-    """DEFAULT_OUTFIT_MESH_NAMES_TO_HIDEに列挙した「本物の別デフォルト私服」を
-    hide_render・hide_viewportの両方でTrueにする。hide_prop_meshes()と同じ理由
-    （VRM Add-onのexport_objects()がvisible_get()==FalseのオブジェクトをVRM出力
-    から除外する）でhide_viewportが実効的な設定であり、hide_renderは意図表示のため
-    あわせて設定する。
-    """
-    missing = []
-    hidden = []
-    for name in DEFAULT_OUTFIT_MESH_NAMES_TO_HIDE:
-        obj = bpy.data.objects.get(name)
-        if obj is None or obj.type != 'MESH':
-            missing.append(name)
-            continue
-        obj.hide_render = True
-        obj.hide_viewport = True
-        hidden.append(name)
+    """DEFAULT_OUTFIT_MESH_NAMES_TO_HIDEに列挙した「本物の別デフォルト私服」を非表示化する。"""
+    return _hide_meshes(DEFAULT_OUTFIT_MESH_NAMES_TO_HIDE, "デフォルト私服")
 
-    if missing:
-        raise RuntimeError(f"以下のデフォルト私服メッシュが見つかりません: {missing}")
 
-    return hidden
+def hide_mixed_in_meshes():
+    """MIXED_IN_MESH_NAMES_TO_HIDEに列挙した「リファレンスに存在しない混入パーツ」を非表示化する。"""
+    return _hide_meshes(MIXED_IN_MESH_NAMES_TO_HIDE, "混入パーツ")
 
 
 def _is_export_visible(obj):
-    """hide_prop_meshes()/hide_default_outfit_meshes()適用後の状態で、
-    このオブジェクトがVRMエクスポート対象に含まれるか（=hide_viewportが
+    """hide_prop_meshes()/hide_default_outfit_meshes()/hide_mixed_in_meshes()
+    適用後の状態で、このオブジェクトがVRMエクスポート対象に含まれるか（=hide_viewportが
     Falseか）を返す。壊れたテクスチャ参照が非表示メッシュにしか
     影響していない場合は実害がないため、relink_broken_textures()の
     未知パターン検出時にこの情報で警告と致命的エラーを切り分ける。
@@ -477,8 +481,9 @@ def relink_broken_textures():
       警告を出力するだけで処理を続行する（実機調査で確認済みの実例:
       "resettex_llc_*.asset"は非表示化済みの"reset"小道具メッシュのみが使用）。
 
-    呼び出し前提: hide_prop_meshes()・hide_default_outfit_meshes()を先に
-    実行し、各メッシュのhide_viewportを確定させておくこと。
+    呼び出し前提: hide_prop_meshes()・hide_default_outfit_meshes()・
+    hide_mixed_in_meshes()を先に実行し、各メッシュのhide_viewportを
+    確定させておくこと。
     """
     real_tex_black_image = None
 
@@ -662,6 +667,9 @@ if __name__ == "__main__":
 
     hidden_default_outfit = hide_default_outfit_meshes()
     print(f"HIDDEN_DEFAULT_OUTFIT_MESHES: {len(hidden_default_outfit)}")
+
+    hidden_mixed_in = hide_mixed_in_meshes()
+    print(f"HIDDEN_MIXED_IN_MESHES: {len(hidden_mixed_in)}")
 
     relink_broken_textures()
 

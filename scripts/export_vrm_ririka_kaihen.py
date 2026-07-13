@@ -180,6 +180,14 @@ def apply_expression_mapping(armature_object):
 
     for preset_name, binds in PRESET_EXPRESSION_MAPPING.items():
         expression = getattr(expressions.preset, preset_name)
+        # VRM Add-onはVRChat由来のシェイプキー名（vrc.v_*・「まばたき」・「笑い」等）
+        # から一部プリセットへ自動でmorph_target_bindsを割り当てる。この上へ
+        # 本スクリプトのマッピングを無条件に追加すると同一シェイプキーが
+        # 二重バインドされ、ランタイムで実効2倍のウェイトがかかる
+        # （実害: リップシンクの口が2倍振幅で開きっぱなしに見える・
+        # まぶたの二重変形が「目の模様」に見える）。本スクリプトの
+        # マッピングを唯一の正とするため、追加前に既存バインドをクリアする。
+        expression.morph_target_binds.clear()
         for mesh_name, shape_key_name in binds:
             _add_morph_target_bind(expression, mesh_name, shape_key_name)
 
