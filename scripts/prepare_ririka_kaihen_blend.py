@@ -205,6 +205,19 @@ MOUTH_STORAGE_SHAPE_KEYS = ["t_upper_off", "t_lower_off", "tang_off"]
 MOUTH_PART_MESH_NAME = "Body"
 EXPECTED_MOUTH_PART_VERTEX_COUNT = 1568  # 上歯569+下歯569+舌430（調査で実測）
 
+# 実機検証（three-vrm）で発覚した「ピンクの開いた口」第2の原因の修正:
+# Task 2bで歯・舌アイランドは削除したが、口腔壁（口内ポケットの壁）は顔スキンと
+# 同一連結成分のため削除できない。body_LLC_Clone_材質はblend_method=HASHEDで
+# VRMエクスポート時にalphaMode=BLEND+doubleSidedになり、three.jsはBLENDを
+# transparent=true, depthWrite=falseで描画するため、同一プリミティブ内の描画順で
+# 口腔壁（ピンクテクスチャ）が顔スキンの上に上書き合成されて見える。
+# three.js上でdepthWrite=trueにするだけで完全に正常表示になることを確認済み
+# （検証画像: vrm_r2_test_depthwrite.png）だが、glTF/VRM標準にBLEND+depthWriteの
+# 組み合わせは存在しないため、alphaMode=MASK（カットアウト透過は維持・
+# 深度書き込みあり）でエクスポートさせる。実現手段はblend_methodではなく
+# ノードツリー書き換え（詳細はfix_face_material_blend_method()のdocstring参照）。
+FACE_MATERIAL_NAME = "body_LLC_Clone_"
+
 # 実機検証（three-vrm、ユーザーのスクリーンショットによる目視確認）で判明:
 # 元のVRChatアバターにはHumanoidボディ本体とは無関係な「小道具/UIギズモ」の
 # メッシュオブジェクトが多数含まれており、これらがVRMエクスポート後は
@@ -507,6 +520,74 @@ def delete_mouth_storage_parts():
     return len(target_indices)
 
 
+def fix_face_material_blend_method():
+    """FACE_MATERIAL_NAMEの材質をalphaMode=MASK（カットアウト透過）で
+    エクスポートさせる（口腔壁の描画順問題の根治）。
+
+    当初は`mat.blend_method = 'CLIP'`で実現する計画だったが、実機調査
+    （Blender 4.5で代入→読み返しがHASHED -> HASHEDのまま変化せず）と
+    エクスポータのソース調査で以下が判明したため、ノードツリー書き換えに変更した:
+
+    - Blender 4.2以降、Material.blend_methodはEEVEE Next移行に伴うレガシー
+      互換プロパティで、実体はsurface_render_method（'DITHERED'/'BLENDED'）。
+      'CLIP'を代入してもDITHEREDへ丸められ、読み返すと'HASHED'になる。
+    - Blender 5.1のio_scene_gltf2はalphaModeの判定にblend_methodを一切
+      使わず、Principled BSDFのAlphaソケットに至るノード構成だけで判定する
+      （io_scene_gltf2/blender/exp/material/search_node_tree.py の
+      gather_alpha_info() / detect_alpha_clip()）:
+        * Alphaが定数1.0 → OPAQUE
+        * Alpha入力の直前が Math(Round) → MASK（cutoff=0.5固定）
+        * Math(1 - (X < cutoff)) / legacy Math(X > cutoff) → MASK（cutoff可変）
+        * それ以外（テクスチャ直結等） → BLEND
+    - VRM Add-on（vrm1_exporter.save_vrm_materials）が材質dictを独自生成する
+      のはMToon1/MMD/レガシーアドオン材質のみで、素のPrincipled BSDF材質は
+      io_scene_gltf2の出力をそのまま使う（body_LLC_Clone_はこれに該当）。
+      つまりblend_method経由の制御は不可能で、ノード書き換えが唯一の手段。
+
+    そこで、AlphaソケットのリンクにMath(Round)ノードを割り込ませて
+    alphaMode=MASK（alphaCutoff=0.5）としてエクスポートさせる。
+    """
+    mat = bpy.data.materials.get(FACE_MATERIAL_NAME)
+    if mat is None or mat.node_tree is None:
+        raise RuntimeError(f"材質'{FACE_MATERIAL_NAME}'が見つかりません")
+
+    bsdf = None
+    for node in mat.node_tree.nodes:
+        if node.type == 'BSDF_PRINCIPLED':
+            bsdf = node
+            break
+    if bsdf is None:
+        raise RuntimeError(f"材質'{FACE_MATERIAL_NAME}'にPrincipled BSDFが見つかりません")
+
+    alpha_socket = bsdf.inputs.get('Alpha')
+    if alpha_socket is None or not alpha_socket.is_linked:
+        raise RuntimeError(
+            f"材質'{FACE_MATERIAL_NAME}'のAlphaソケットがテクスチャに"
+            "リンクされていません（想定と異なる構成。要再調査）"
+        )
+
+    link = alpha_socket.links[0]
+    src_socket = link.from_socket
+    round_node = mat.node_tree.nodes.new('ShaderNodeMath')
+    round_node.operation = 'ROUND'
+    round_node.label = "Alpha Clip (alphaMode=MASK)"
+    round_node.location = (bsdf.location.x - 200.0, bsdf.location.y - 400.0)
+    mat.node_tree.links.remove(link)
+    mat.node_tree.links.new(src_socket, round_node.inputs[0])
+    mat.node_tree.links.new(round_node.outputs[0], alpha_socket)
+
+    # エクスポータは参照しないが、Blenderビューポート上の見た目・意図表示を
+    # エクスポート結果（カットアウト透過）と揃えておく
+    mat.surface_render_method = 'DITHERED'
+    mat.alpha_threshold = 0.5
+
+    print(
+        "FACE_MATERIAL_BLEND_METHOD: "
+        f"BLEND(alphaテクスチャ直結) -> MASK(cutoff=0.5, {src_socket.node.name}."
+        f"{src_socket.name} -> Math(Round) -> Alpha)"
+    )
+
+
 def _is_export_visible(obj):
     """hide_prop_meshes()/hide_default_outfit_meshes()/hide_mixed_in_meshes()
     適用後の状態で、このオブジェクトがVRMエクスポート対象に含まれるか（=hide_viewportが
@@ -730,6 +811,8 @@ if __name__ == "__main__":
     print(f"HIDDEN_MIXED_IN_MESHES: {len(hidden_mixed_in)}")
 
     delete_mouth_storage_parts()
+
+    fix_face_material_blend_method()
 
     relink_broken_textures()
 
