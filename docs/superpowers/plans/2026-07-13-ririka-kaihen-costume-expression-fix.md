@@ -302,6 +302,101 @@ git commit -m "fix: 混入衣装メッシュの除外と表情バインド二重
 
 ---
 
+### Task 2b: 【第2ラウンド改訂】口内パーツ（歯・舌）の物理削除
+
+> **改訂の経緯（Task 3の1回目の検証で発覚）**: 衣装・羽の混入と表情バインド二重登録はTask 2で解消したが、「ピンクの開いた口」が残存した。追加調査で真因を特定: `Body`メッシュ（顔専用、シェイプキー705個）内の**歯（上下）・舌の3アイランド（計1568頂点、全て`body_LLC_Clone_`マテリアル）**が、幾何学的には唇の奥約9mmにあるにもかかわらず、`alphaMode=BLEND`+`doubleSided`のマテリアルをthree.jsが`depthWrite=false`で描画するため、プリミティブ内の描画順（歯→舌が顔スキンより後）で手前に合成されて見えていた。Unity側ではFXレイヤーが収納シェイプキー`t_upper_off`/`t_lower_off`/`tang_off`を常時1に保って口内ポケットへ収納していたが、blend内では全キー値0のため常時展開状態でエクスポートされていた。
+>
+> 修正方式は物理削除（案a）を採用。収納キーのvalue=1保存（案b）はエクスポータのウェイト出力とビューアのリセット挙動に依存して脆弱、マテリアル分離（案c）は歯・舌が顔スキンと同一スロットのため不可。削除の安全性は実機検証済み（削除後も他704キーのデルタは完全一致、レンダリングで顔・閉じ口とも正常、`vrc.v_aa`開口時も口内ポケット表示で自然）。
+
+**Files:**
+- Modify: `ar-avatar-demo/scripts/prepare_ririka_kaihen_blend.py`
+- Delete: 第2ラウンド調査の残置一時ファイル（`scripts/_investigate_mouth_overlay.py`・`scripts/_verify_mouth_fix.py`・`scripts/_isolate_overlay_render.py`・`scripts/_isolate_tongue_render.py`・`_mouth_investigation\`）
+
+- [ ] **Step 1: 口内パーツ削除関数を追加する**
+
+`prepare_ririka_kaihen_blend.py`に、収納シェイプキーのデルタで対象頂点を特定して物理削除する関数を追加する（アイランド番号に依存しない頑健な特定方法）:
+
+```python
+# 実機検証（three-vrm）で発覚した「ピンクの開いた口」オーバーレイの修正:
+# Bodyメッシュ内の歯（上下）・舌の3アイランドは、幾何学的には唇の奥約9mmに
+# あるが、body_LLC_Clone_マテリアルがalphaMode=BLEND+doubleSidedでエクスポート
+# されるため、three.js側でdepthWrite=falseの透過描画になり、プリミティブ内の
+# 描画順（歯→舌が顔スキンより後）で手前に上書き合成されて見える。
+# Unity/VRChat側ではFXレイヤーが収納シェイプキー（下記3キー）を常時1に保って
+# 口内ポケットへ収納していたが、FBXにはキー値0で入ってくるため常時展開状態
+# だった。収納キーvalue=1のまま保存する方式はエクスポータのウェイト出力と
+# ビューア側のリセット挙動に依存して脆弱なため、該当頂点を物理削除する。
+# 各キーのデルタは該当アイランドの頂点だけを排他的に動かす（他の頂点への
+# 影響ゼロ、実機検証で確認済み）ため、デルタ非0の頂点集合＝削除対象になる。
+MOUTH_STORAGE_SHAPE_KEYS = ["t_upper_off", "t_lower_off", "tang_off"]
+MOUTH_PART_MESH_NAME = "Body"
+EXPECTED_MOUTH_PART_VERTEX_COUNT = 1568  # 上歯569+下歯569+舌430（調査で実測）
+
+
+def delete_mouth_storage_parts():
+    """MOUTH_STORAGE_SHAPE_KEYSのデルタが非0の頂点（歯・舌のアイランド）を
+    Bodyメッシュから物理削除する。"""
+    import bmesh
+
+    obj = bpy.data.objects.get(MOUTH_PART_MESH_NAME)
+    if obj is None or obj.type != 'MESH':
+        raise RuntimeError(f"メッシュオブジェクト'{MOUTH_PART_MESH_NAME}'が見つかりません")
+    me = obj.data
+    if me.shape_keys is None:
+        raise RuntimeError(f"'{MOUTH_PART_MESH_NAME}'にシェイプキーがありません")
+
+    key_blocks = me.shape_keys.key_blocks
+    basis = key_blocks.get('Basis')
+    if basis is None:
+        raise RuntimeError("Basisシェイプキーが見つかりません")
+
+    target_indices = set()
+    for key_name in MOUTH_STORAGE_SHAPE_KEYS:
+        kb = key_blocks.get(key_name)
+        if kb is None:
+            raise RuntimeError(f"収納シェイプキー'{key_name}'が見つかりません")
+        for i in range(len(kb.data)):
+            if (kb.data[i].co - basis.data[i].co).length > 1e-6:
+                target_indices.add(i)
+
+    if len(target_indices) != EXPECTED_MOUTH_PART_VERTEX_COUNT:
+        raise RuntimeError(
+            f"削除対象頂点数が想定と異なります: {len(target_indices)} != "
+            f"{EXPECTED_MOUTH_PART_VERTEX_COUNT}（FBXの構造が変わった可能性。要再調査）"
+        )
+
+    bm = bmesh.new()
+    bm.from_mesh(me)
+    bm.verts.ensure_lookup_table()
+    doomed = [bm.verts[i] for i in sorted(target_indices)]
+    bmesh.ops.delete(bm, geom=doomed, context='VERTS')
+    bm.to_mesh(me)
+    bm.free()
+
+    print(f"MOUTH_STORAGE_PARTS_DELETED: {len(target_indices)} vertices")
+    return len(target_indices)
+```
+
+- [ ] **Step 2: main処理に配線する**
+
+`hide_mixed_in_meshes()`呼び出しの直後（`relink_broken_textures()`の前）に追加:
+
+```python
+    delete_mouth_storage_parts()
+```
+
+- [ ] **Step 3: prepare再実行（Blender 4.5、`--factory-startup`推奨）→ 出力確認**
+
+第2ラウンド調査の知見: ヘッドレス実行時にCATSアドオンのバックグラウンドスレッドがクラッシュすることがあるため`--factory-startup`を付ける（VRM Add-onはexport段でしか使わないためprepare段では問題ない）。
+
+Expected: `MOUTH_STORAGE_PARTS_DELETED: 1568 vertices`を含む従来出力＋`SAVED:`。
+
+- [ ] **Step 4: 一時ファイル削除（第2ラウンド調査の残置分）→ commit**
+
+コミット対象は`scripts/prepare_ririka_kaihen_blend.py`のみ。メッセージ例: `fix: 口内パーツ(歯・舌)の収納シェイプキー対象頂点を物理削除`
+
+---
+
 ### Task 3: VRM再エクスポート＋ブラウザ実機検証
 
 **Files:** なし（コード変更なし、アーティファクト再生成と検証のみ）
