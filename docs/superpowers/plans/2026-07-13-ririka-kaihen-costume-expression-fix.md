@@ -159,7 +159,12 @@ print(f"RENDERED: {output_png}")
 # 確認）で「リファレンスに存在しない混入パーツ」と判定したメッシュ。
 # 腰の羽状パーツはユーザー確認済みで「本来存在しないパーツ」。
 MIXED_IN_MESH_NAMES_TO_HIDE = [
-    # Task 1の調査結果で確定したメッシュ名をここに列挙する
+    "Bag",  # 「腰の羽」の正体: コウモリ羽付きリュック（単体レンダリングで形状確認済み）。
+            # 材質が隠蔽済みデフォルト私服と同族（cloth1/metal/Diamond/pearl）
+    "cloth_Accessories",  # 隠蔽済み私服「Cloth」の付属アクセサリー一式
+                          # （頭部のミニコウモリ羽クリップ・耳飾り・腰ストリップ）
+    "pet",  # スケール0で全次元dims=0の死にジオメトリ（3146ポリゴンが1点に潰れた状態）。
+            # 現状は見えないが、無駄ポリゴン排除と将来の出現防止のため非表示にする
 ]
 ```
 
@@ -213,59 +218,41 @@ def hide_mixed_in_meshes():
     return _hide_meshes(MIXED_IN_MESH_NAMES_TO_HIDE, "混入パーツ")
 ```
 
-- [ ] **Step 3: シェイプキーのデフォルト値リセット処理を追加する**
+- [ ] **Step 3: 【調査結果による改訂】表情バインドの二重登録を修正する（export_vrm_ririka_kaihen.py）**
 
-`hide_mixed_in_meshes()`の定義の直後に以下を追加する:
+> **改訂の経緯（Task 1調査結果）**: 当初仮説の「シェイプキー焼き込み」は棄却された（blend内の非0シェイプキーは0個、glTF初期ウェイトも全0）。真因は表情バインドの二重登録 — VRM Add-onがVRChat由来のシェイプキー名（`vrc.v_*`・「まばたき」等）から自動でバインドを割り当て済みのところへ、`apply_expression_mapping()`が既存バインドをクリアせず追加していた。そのためシェイプキーリセット処理は追加せず（YAGNI）、代わりにこの修正を行う。
+
+`scripts/export_vrm_ririka_kaihen.py`の`apply_expression_mapping()`を以下に置き換える:
 
 ```python
-# ユーザーの実見確認で発覚した「口が開きっぱなし・目に意図しない模様」の修正:
-# FBXにはUnity側SkinnedMeshRendererのblendshapeウェイトがシェイプキーのvalueと
-# してそのまま入っており、非0のままVRMエクスポートするとglTFのmorph target
-# 初期ウェイトとして焼き込まれ、表情が常時変形したままになる。表情はVRMの
-# expressionバインド（export_vrm_ririka_kaihen.py側）が動的に制御するため、
-# 静的な焼き込み値は0が正しい。ただし体型カスタマイズ系のシェイプキーが
-# 意図的に非0へ設定されている場合はその限りではないため、保持したいキーは
-# SHAPE_KEYS_TO_PRESERVEへ (メッシュ名, シェイプキー名) で明示する。
-SHAPE_KEYS_TO_PRESERVE = {
-    # Task 1の調査で「意図した体型カスタマイズの焼き込み」と判定され、
-    # ユーザーが保持を承認したもののみをここに追加する（初期状態は空）
-}
+def apply_expression_mapping(armature_object):
+    expressions = armature_object.data.vrm_addon_extension.vrm1.expressions
 
+    for preset_name, binds in PRESET_EXPRESSION_MAPPING.items():
+        expression = getattr(expressions.preset, preset_name)
+        # VRM Add-onはVRChat由来のシェイプキー名（vrc.v_*・「まばたき」・「笑い」等）
+        # から一部プリセットへ自動でmorph_target_bindsを割り当てる。この上へ
+        # 本スクリプトのマッピングを無条件に追加すると同一シェイプキーが
+        # 二重バインドされ、ランタイムで実効2倍のウェイトがかかる
+        # （実害: リップシンクの口が2倍振幅で開きっぱなしに見える・
+        # まぶたの二重変形が「目の模様」に見える）。本スクリプトの
+        # マッピングを唯一の正とするため、追加前に既存バインドをクリアする。
+        expression.morph_target_binds.clear()
+        for mesh_name, shape_key_name in binds:
+            _add_morph_target_bind(expression, mesh_name, shape_key_name)
 
-def reset_nonzero_shape_keys():
-    """Basis以外の全シェイプキーのvalueを0にリセットする
-    （SHAPE_KEYS_TO_PRESERVEに列挙したものを除く）。
-    """
-    reset = []
-    preserved = []
-    for obj in bpy.data.objects:
-        if obj.type != 'MESH' or obj.data.shape_keys is None:
-            continue
-        for kb in obj.data.shape_keys.key_blocks:
-            if kb.name == 'Basis':
-                continue
-            if abs(kb.value) <= 1e-6:
-                continue
-            if (obj.name, kb.name) in SHAPE_KEYS_TO_PRESERVE:
-                preserved.append(f"{obj.name}::{kb.name}={kb.value:.4f}")
-                continue
-            kb.value = 0.0
-            reset.append(f"{obj.name}::{kb.name}")
-
-    print(f"SHAPE_KEYS_RESET: {len(reset)}")
-    for entry in reset:
-        print(f"  {entry}")
-    if preserved:
-        print(f"SHAPE_KEYS_PRESERVED: {len(preserved)}")
-        for entry in preserved:
-            print(f"  {entry}")
-
-    return reset
+    for custom_name, binds in CUSTOM_EXPRESSION_MAPPING.items():
+        custom_expression = expressions.custom.add()
+        custom_expression.custom_name = custom_name
+        for mesh_name, shape_key_name in binds:
+            _add_morph_target_bind(custom_expression, mesh_name, shape_key_name)
 ```
 
-- [ ] **Step 4: main処理に2つの新ステップを配線する**
+（`PRESET_EXPRESSION_MAPPING`が管理しない`lookUp`/`lookDown`への自動割り当てバインド（「上」「下」）は残す — desktop-vrm-mascotは使用せず、発火時のみ作用するため無害。設計書の改訂セクション参照）
 
-`if __name__ == "__main__":`ブロックの
+- [ ] **Step 4: main処理に新ステップを配線する**
+
+`prepare_ririka_kaihen_blend.py`の`if __name__ == "__main__":`ブロックの
 
 ```python
     hidden_default_outfit = hide_default_outfit_meshes()
@@ -283,8 +270,6 @@ def reset_nonzero_shape_keys():
     hidden_mixed_in = hide_mixed_in_meshes()
     print(f"HIDDEN_MIXED_IN_MESHES: {len(hidden_mixed_in)}")
 
-    reset_nonzero_shape_keys()
-
     relink_broken_textures()
 ```
 
@@ -294,23 +279,25 @@ def reset_nonzero_shape_keys():
 "C:\Program Files\Blender Foundation\Blender 4.5\blender.exe" --background --python "C:\Users\PC_User\Documents\ar-avatar-demo\scripts\prepare_ririka_kaihen_blend.py" -- "D:\VRChatCreatorCompanion\VRChatProjects\りりか　黒猫悪夢\Assets\ririka 黒猫悪夢(Clone).fbx" "C:\Users\PC_User\Documents\ar-avatar-demo\source\ririka_kaihen.blend"
 ```
 
-Expected: 従来の出力（`HIPS_BONE_ADDED`〜`PHANTOM_EMISSION_FIXED`）に加えて`HIDDEN_MIXED_IN_MESHES: <N>`（Task 1で確定した個数）と`SHAPE_KEYS_RESET: <M>`（Task 1のリセット対象数と一致）が出力され、最後に`SAVED: ...ririka_kaihen.blend`。`RuntimeError`（メッシュ名が見つからない）が出た場合はTask 1のリストのタイポを疑う。
+Expected: 従来の出力（`HIPS_BONE_ADDED`〜`PHANTOM_EMISSION_FIXED`）に加えて`HIDDEN_MIXED_IN_MESHES: 3`が出力され、最後に`SAVED: ...ririka_kaihen.blend`。`RuntimeError`（メッシュ名が見つからない）が出た場合はリストのタイポを疑う。
 
 - [ ] **Step 6: 一時ファイルを削除する**
 
-```bash
-cd "C:\Users\PC_User\Documents\ar-avatar-demo"
-git clean -n scripts/_audit_ririka_kaihen.py scripts/_render_single_mesh.py _audit_output.txt
-```
+削除対象（Task 1の残置ファイル）:
+- `scripts/_audit_ririka_kaihen.py`
+- `scripts/_render_single_mesh.py`
+- `_audit_output.txt`
+- `_expr_dump.txt`
+- `_audit_renders\`（ディレクトリごと）
 
-`git clean -n`（dry run）で対象がこの3ファイルだけであることを確認してから、個別に削除する（`del`または`Remove-Item`。`rm -rf`は使わない）。レンダリング確認用に生成したPNGがあればそれも削除する。
+`del`/`Remove-Item`で個別に削除する（`rm -rf`は使わない。ディレクトリは`Remove-Item -Recurse _audit_renders -Confirm:$false`）。削除後に`git status --short`で、上記以外に意図しない変更がないことを確認する。
 
 - [ ] **Step 7: commit**
 
 ```bash
 cd "C:\Users\PC_User\Documents\ar-avatar-demo"
-git add scripts/prepare_ririka_kaihen_blend.py
-git commit -m "fix: 混入衣装メッシュの除外とシェイプキー焼き込み値のリセットを追加"
+git add scripts/prepare_ririka_kaihen_blend.py scripts/export_vrm_ririka_kaihen.py
+git commit -m "fix: 混入衣装メッシュの除外と表情バインド二重登録の解消"
 ```
 
 ---
