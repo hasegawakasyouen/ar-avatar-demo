@@ -3,3 +3,12 @@ smoketest.usdz
 *.blend1
 *.blend2
 source/avatar_full_for_mixamo.fbx
+
+# 100MB超（GitHub上限のためgit管理外。Macへはscpで直接転送する）
+model.vrm
+ririka_kaihen.vrm
+source/ririka_kaihen.blend
+
+# ローカル環境・キャッシュ
+.claude/
+__pycache__/
