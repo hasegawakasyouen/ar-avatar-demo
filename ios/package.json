@@ -1,0 +1,17 @@
+{
+  "name": "ririka-mascot-web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build-web.mjs",
+    "test": "node --test Web/tests/*.test.js"
+  },
+  "dependencies": {
+    "@pixiv/three-vrm": "3.5.3",
+    "@pixiv/three-vrm-animation": "3.5.3",
+    "three": "0.180.0"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.6"
+  }
+}

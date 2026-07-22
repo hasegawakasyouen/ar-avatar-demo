@@ -12,3 +12,10 @@ source/ririka_kaihen.blend
 # ローカル環境・キャッシュ
 .claude/
 __pycache__/
+
+# iOS Webビルドのローカル依存・pnpmキャッシュ
+ios/node_modules/
+.pnpm-store/
+ios/Web/dist/*.map
+ios/**/xcuserdata/
+*.xcuserstate
